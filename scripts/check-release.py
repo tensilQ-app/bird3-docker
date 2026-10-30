@@ -18,7 +18,7 @@ def get(url):
     request = urllib.request.Request(url, headers={"User-Agent": "bird3-docker-release-check/1"})
     with urllib.request.urlopen(request, timeout=35) as response:
         if urlsplit(response.url).scheme != "https" or urlsplit(response.url).hostname not in {"bird.nic.cz", "gitlab.nic.cz"}:
-            raise RuntimeError("Unexpected redirect host")
+            raise RuntimeError(f"Unexpected redirect host: {urlsplit(response.url).hostname}")
         return response.read()
 
 
