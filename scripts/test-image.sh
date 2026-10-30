@@ -5,7 +5,17 @@ platform="${2:?platform required}"
 version="${3:?version required}"
 dir="$(mktemp -d)"
 name="bird3-test-$$-$RANDOM"
-cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$dir"; }
+cleanup() {
+  result=$?
+  if [ "$result" -ne 0 ]; then
+    docker image inspect --format 'Entrypoint={{json .Config.Entrypoint}} Cmd={{json .Config.Cmd}}' "$image" || true
+    docker inspect --format 'Path={{.Path}} Args={{json .Args}} State={{json .State}}' "$name" || true
+    docker logs "$name" 2>&1 || true
+    [ ! -f "$dir/status" ] || cat "$dir/status"
+  fi
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  rm -rf "$dir"
+}
 trap cleanup EXIT
 cat > "$dir/bird.conf" <<'CONF'
 log stderr all;
@@ -52,6 +62,10 @@ for n in $(seq 1 30); do
     test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" = 0
     echo "PASS: $platform BIRD $version (parse, protocols, IPv4/IPv6 routes, socket, birdc, shutdown)"
     exit 0
+  fi
+  if [ "$(docker inspect -f '{{.State.Running}}' "$name")" != true ]; then
+    echo 'BIRD container exited before birdc became ready' >&2
+    exit 1
   fi
   sleep 1
 done
