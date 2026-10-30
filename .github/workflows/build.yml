@@ -54,7 +54,7 @@ jobs:
           name: verified-source
       - uses: docker/setup-buildx-action@v3
       - name: Build OCI archive with SBOM and provenance
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/${{ matrix.arch }}
