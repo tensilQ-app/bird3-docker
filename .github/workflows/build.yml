@@ -1,0 +1,99 @@
+name: Build and test
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        default: ''
+    outputs:
+      version:
+        value: ${{ jobs.source.outputs.version }}
+      latest:
+        value: ${{ jobs.source.outputs.latest }}
+      minor_latest:
+        value: ${{ jobs.source.outputs.minor_latest }}
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      latest: ${{ steps.source.outputs.latest }}
+      minor_latest: ${{ steps.source.outputs.minor_latest }}
+      sha256: ${{ steps.source.outputs.sha256 }}
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 scripts/test-release.py
+      - run: bash -n scripts/test-image.sh
+      - name: Verify official release signature and archive sources
+        id: source
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python3 scripts/check-release.py --version "$VERSION" --output "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verified-source
+          path: |
+            bird.tar.gz
+            source.json
+  build:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-source
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build OCI archive with SBOM and provenance
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          pull: true
+          no-cache: true
+          outputs: type=oci,dest=image.tar
+          provenance: mode=max
+          sbom: true
+          build-args: |
+            BIRD_VERSION=${{ needs.source.outputs.version }}
+            BIRD_SHA256=${{ needs.source.outputs.sha256 }}
+            BIRD_COMMIT=${{ needs.source.outputs.commit }}
+      - name: Load exact OCI image for runtime checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+          skopeo copy oci-archive:image.tar docker-daemon:bird3-test:${{ matrix.arch }}
+      - name: Native functional tests
+        run: bash scripts/test-image.sh bird3-test:${{ matrix.arch }} linux/${{ matrix.arch }} '${{ needs.source.outputs.version }}' | tee runtime-test.txt
+      - name: Trivy security gate
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/work" \
+            aquasec/trivy:0.76.1 image --scanners vuln --ignore-unfixed \
+            --severity HIGH,CRITICAL --exit-code 1 --format json --output /work/trivy.json \
+            bird3-test:${{ matrix.arch }}
+      - name: Preserve reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reports-${{ matrix.arch }}
+          path: |
+            runtime-test.txt
+            trivy.json
+      - name: Preserve successfully tested OCI archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-${{ matrix.arch }}
+          path: image.tar
+          compression-level: 0

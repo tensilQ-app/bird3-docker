@@ -1,0 +1,116 @@
+name: Release BIRD 3
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Official stable version (blank = latest)'
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: bird3-release
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ inputs.version || '' }}
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: image-*
+          path: images
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: verified-source
+          path: source
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested archives and revision manifest
+        id: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bird3"
+          revision="$VERSION-r${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          printf '%s' "$GH_TOKEN" | skopeo login --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+          for arch in amd64 arm64; do
+            skopeo copy --all --preserve-digests "oci-archive:images/image-$arch/image.tar" "docker://$image:$revision-$arch"
+          done
+          docker buildx imagetools create -t "$image:$revision" "$image:$revision-amd64" "$image:$revision-arm64"
+          docker buildx imagetools inspect --raw "$image:$revision" > manifest.json
+          python3 - <<'PY'
+          import json
+          m = json.load(open('manifest.json'))['manifests']
+          platforms = [(x.get('platform', {}).get('os'), x.get('platform', {}).get('architecture')) for x in m]
+          assert platforms.count(('linux', 'amd64')) == 1, platforms
+          assert platforms.count(('linux', 'arm64')) == 1, platforms
+          assert len(m) >= 4, 'SBOM/provenance attestation manifests are missing'
+          PY
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - name: Verify anonymous access before moving release tags
+        env:
+          IMAGE: ${{ steps.publish.outputs.image }}
+          REVISION: ${{ steps.publish.outputs.revision }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/anonymous
+          printf '{"auths":{}}' > /tmp/anonymous/config.json
+          for arch in amd64 arm64; do
+            skopeo copy --src-authfile /tmp/anonymous/config.json --override-os linux --override-arch "$arch" \
+              "docker://$IMAGE:$REVISION" "dir:/tmp/anonymous/$arch"
+          done
+      - name: Promote verified revision to version aliases
+        env:
+          IMAGE: ${{ steps.publish.outputs.image }}
+          REVISION: ${{ steps.publish.outputs.revision }}
+          VERSION: ${{ needs.build.outputs.version }}
+          LATEST: ${{ needs.build.outputs.latest }}
+          MINOR_LATEST: ${{ needs.build.outputs.minor_latest }}
+        run: |
+          set -euo pipefail
+          # Promote the existing manifest; never rebuild after tests.
+          args=(-t "$IMAGE:$VERSION")
+          if [ "$VERSION" = "$MINOR_LATEST" ]; then args+=(-t "$IMAGE:${VERSION%.*}"); fi
+          if [ "$VERSION" = "$LATEST" ]; then args+=(-t "$IMAGE:3" -t "$IMAGE:latest"); fi
+          docker buildx imagetools create "${args[@]}" "$IMAGE:$REVISION"
+          docker buildx imagetools inspect "$IMAGE:$REVISION" | tee release.txt
+          {
+            echo "## Published BIRD $VERSION"
+            echo "Image: \`$IMAGE:$REVISION\`"
+            echo 'Native AMD64 and ARM64 functional tests and Trivy gate passed.'
+            echo 'Anonymous downloads verified for both architectures.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: release-metadata
+          path: |
+            manifest.json
+            release.txt
+            source/source.json
