@@ -12,17 +12,96 @@ on:
         description: 'Official stable version (blank = latest)'
         type: string
         required: false
+      force:
+        description: Rebuild even if all resolved inputs are unchanged
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
   group: bird3-release
   cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
 jobs:
-  build:
+  discover:
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Discover the official stable release without compiling
+        id: version
+        env:
+          VERSION: ${{ inputs.version || '' }}
+        run: python3 scripts/rebuild-state.py version --version "$VERSION" --output "$GITHUB_OUTPUT"
+  probe:
+    needs: discover
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compare base image and resolved build and runtime APK packages
+        env:
+          VERSION: ${{ needs.discover.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          args=()
+          if [ "$FORCE" = true ]; then args+=(--force); fi
+          python3 scripts/rebuild-state.py probe --version "$VERSION" --arch "$ARCH" "${args[@]}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: inputs-${{ matrix.arch }}
+          path: inputs-${{ matrix.arch }}.json
+          overwrite: true
+          retention-days: 7
+  decide:
+    needs: probe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.decision.outputs.changed }}
+      amd64: ${{ steps.decision.outputs.amd64 }}
+      arm64: ${{ steps.decision.outputs.arm64 }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: inputs-*
+          merge-multiple: true
+      - name: Skip compilation and publication when both platforms are unchanged
+        id: decision
+        run: |
+          python3 - <<'PYCODE'
+          import json, os
+          data = {a: json.load(open(f'inputs-{a}.json')) for a in ('amd64', 'arm64')}
+          changed = any(d['changed'] for d in data.values())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              print(f'changed={str(changed).lower()}', file=out)
+              for arch, state in data.items():
+                  print(f'{arch}={state["fingerprint"]}', file=out)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              print('Build inputs changed or forced: rebuild both platforms.' if changed else 'UNCHANGED: BIRD, Alpine base, all resolved APK packages and packaging inputs match the published image. Build and publication skipped.', file=out)
+          PYCODE
+  build:
+    needs: [discover, decide]
+    if: needs.decide.outputs.changed == 'true'
     uses: ./.github/workflows/build.yml
     with:
-      version: ${{ inputs.version || '' }}
+      version: ${{ needs.discover.outputs.version }}
+      inputs_amd64: ${{ needs.decide.outputs.amd64 }}
+      inputs_arm64: ${{ needs.decide.outputs.arm64 }}
   publish:
     needs: build
     runs-on: ubuntu-24.04

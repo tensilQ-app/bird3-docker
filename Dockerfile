@@ -25,6 +25,7 @@ FROM alpine:3.24 AS runtime
 ARG BIRD_VERSION
 ARG BIRD_SHA256
 ARG BIRD_COMMIT
+ARG BUILD_INPUTS
 RUN apk upgrade --no-cache && apk add --no-cache \
     readline ncurses-libs libssh ca-certificates && mkdir -p /etc/bird /run/bird
 COPY --from=build /out/usr/sbin/ /usr/sbin/
@@ -41,6 +42,7 @@ LABEL org.opencontainers.image.authors="tensilQ-app <info@tensilq.app>" \
       org.opencontainers.image.source="https://github.com/tensilQ-app/bird3-docker" \
       org.opencontainers.image.version="$BIRD_VERSION" \
       org.opencontainers.image.licenses="GPL-2.0-or-later" \
+      app.tensilq.bird.build-inputs="$BUILD_INPUTS" \
       cz.nic.bird.source.commit="$BIRD_COMMIT" \
       cz.nic.bird.source.sha256="$BIRD_SHA256"
 STOPSIGNAL SIGTERM

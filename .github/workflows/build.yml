@@ -5,6 +5,12 @@ on:
       version:
         type: string
         default: ''
+      inputs_amd64:
+        type: string
+        default: ''
+      inputs_arm64:
+        type: string
+        default: ''
     outputs:
       version:
         value: ${{ jobs.source.outputs.version }}
@@ -30,6 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: python3 scripts/test-release.py
+      - run: python3 scripts/test-rebuild-state.py
       - run: bash -n scripts/test-image.sh
       - name: Verify official release signature and archive sources
         id: source
@@ -39,6 +46,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verified-source
+          retention-days: 7
           path: |
             bird.tar.gz
             source.json
@@ -50,8 +58,10 @@ jobs:
         include:
           - arch: amd64
             runner: ubuntu-24.04
+            fingerprint: ${{ inputs.inputs_amd64 }}
           - arch: arm64
             runner: ubuntu-24.04-arm
+            fingerprint: ${{ inputs.inputs_arm64 }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
@@ -74,6 +84,7 @@ jobs:
             BIRD_VERSION=${{ needs.source.outputs.version }}
             BIRD_SHA256=${{ needs.source.outputs.sha256 }}
             BIRD_COMMIT=${{ needs.source.outputs.commit }}
+            BUILD_INPUTS=${{ matrix.fingerprint }}
       - name: Load exact OCI image for runtime checks
         run: |
           sudo apt-get update
@@ -94,6 +105,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: reports-${{ matrix.arch }}
+          retention-days: 7
           path: |
             runtime-test.txt
             trivy.json
@@ -101,5 +113,6 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-${{ matrix.arch }}
+          retention-days: 7
           path: image.tar
           compression-level: 0

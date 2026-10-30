@@ -22,6 +22,12 @@ Dependabot retains its own bot identity. Never merge branches descended from the
 
 ## Release operations
 
+The daily Release workflow first discovers the official stable BIRD version, then resolves the Docker Official Image `alpine:3.24` and the complete installed APK package sets for both Dockerfile stages on native AMD64/ARM64 runners. It compares a fingerprint of those inputs and the tracked packaging/build/test/workflow files with the `app.tensilq.bird.build-inputs` label on each architecture of the published version tag. Documentation-only changes are excluded. If both match, compilation, tests and publication are skipped; no new revision is created. Metadata errors fail the check rather than being treated as unchanged. Existing images without the label receive one baseline rebuild.
+
+A change on either architecture rebuilds and validates both. Build-time source signature verification, fresh base pulls, APK upgrades, native tests, Trivy gates and attestation-preserving promotion remain mandatory. The preflight fingerprint is an observation, not an APK lockfile: repository changes between probing and building may cause another rebuild on the next check. Successful publication stores the new fingerprints in the tested image itself; there is no expiring cache or state commit to lose. Failed builds do not update that state or the existing aliases.
+
+Manual dispatch offers a `force` boolean for a full rebuild without changed inputs. The independent **Scan published image** workflow scans the current `3` index daily on both native architectures using a fresh Trivy database, without compiling or publishing. It resolves one immutable index digest for both scans; scanner/registry/database errors and fixable HIGH/CRITICAL findings fail the workflow. Review Actions failures/notifications. CI ignores documentation-only pushes and pull requests.
+
 Manual dispatch accepts an optional stable `version`. An older explicitly selected version does not update `3` or `latest`. An older patch also does not update its minor-series alias when a newer stable patch is listed upstream. Scheduled GitHub Actions may be disabled after prolonged repository inactivity; check the Actions tab and failure notifications. Dependabot tracks workflow actions and Docker base references.
 
 ### First publication

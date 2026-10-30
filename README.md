@@ -6,6 +6,8 @@ Unofficial, independently maintained multi-architecture images of the [BIRD Inte
 
 ## Platforms and features
 
+**Base image:** the [Docker Official Image `alpine:3.24`](https://hub.docker.com/_/alpine), used for both the build and runtime stages.
+
 Native builds and runtime tests run on **linux/amd64** and **linux/arm64**. No emulation is used in release validation. All standard upstream protocols remain enabled, including BGP, OSPFv2/v3, Babel, BFD, RIP/RIPng, RPKI, IPv4/IPv6, kernel, direct and static; libssh support is explicitly required. The image contains `bird`, `birdc`, `birdcl`, their runtime libraries, license notices and corresponding BIRD source. Build tools are excluded from the runtime image.
 
 The image contains **no default routing configuration**, user infrastructure settings, service integration or supervisor. BIRD runs as PID 1 and logs to stderr. Linux kernel support and networking permissions remain the deployment's responsibility.
@@ -91,7 +93,7 @@ Version examples are illustrative. All ordinary version aliases can move when de
 image: ghcr.io/tensilq-app/bird3@sha256:REPLACE_WITH_INDEX_DIGEST
 ```
 
-Images are rebuilt daily with updated Alpine 3.24 packages, even when BIRD has not changed. New stable BIRD 3 releases are detected automatically; prereleases, beta and RC versions are excluded. Updating a registry tag does not update running containers: pull the image and recreate the container to apply an update.
+Updates are checked daily. Images are rebuilt only when a stable BIRD 3 release, the Alpine 3.24 base image, resolved build/runtime packages, or packaging inputs change, or when a maintainer forces a rebuild. Unchanged images are not republished. Prereleases, beta and RC versions are excluded. The published image is scanned daily with a fresh Trivy vulnerability database, even when no rebuild is needed. To apply an update, pull the image and recreate the container.
 
 ## Security and verification
 
