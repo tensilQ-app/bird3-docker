@@ -12,7 +12,7 @@ RUN test -n "$BIRD_VERSION" && test -n "$BIRD_SHA256" && \
     tar -xzf /tmp/bird.tar.gz --strip-components=1 && \
     test "$(cat VERSION)" = "$BIRD_VERSION" && \
     autoreconf -fi && \
-    ./configure --prefix=/usr --sysconfdir=/etc/bird --localstatedir=/var --enable-libssh && \
+    ./configure --prefix=/usr --sysconfdir=/etc/bird --localstatedir=/var --enable-libssh --disable-lto && \
     make -j"$(nproc)" && make DESTDIR=/out install && \
     mkdir -p /out/usr/share/licenses/bird && \
     cp /src/README /src/proto/bmp/LICENSE /out/usr/share/licenses/bird/
