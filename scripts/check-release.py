@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -17,6 +18,8 @@ from urllib.parse import urlsplit
 
 PAGE = 'https://bird.nic.cz/get-bird/'
 GIT = 'https://gitlab.nic.cz/labs/bird.git'
+MIRROR = 'https://github.com/CZ-NIC/bird.git'
+OFFICIAL_GIT = (GIT, MIRROR)
 FINGERPRINT = '6EFA4F8288F022C523505F30BA756F665CB418E2'
 VERSION = re.compile(r'3\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)')
 
@@ -54,21 +57,24 @@ def fetch_page():
 
 
 def fetch_tag(repo, tag):
-    for attempt in range(4):
-        try:
-            result = subprocess.run(
-                ['git', '-C', str(repo), '-c', 'http.followRedirects=false',
-                 'fetch', '--depth=1', GIT, f'refs/tags/{tag}:refs/tags/{tag}'],
-                timeout=180,
-            )
-            if result.returncode == 0:
-                return
-            if attempt == 3:
-                result.check_returncode()
-        except subprocess.TimeoutExpired:
-            if attempt == 3:
-                raise
-        time.sleep(5 * (attempt + 1))
+    last_error = None
+    for remote in OFFICIAL_GIT:
+        for attempt in range(4):
+            try:
+                result = subprocess.run(
+                    ['git', '-C', str(repo), '-c', 'http.followRedirects=false',
+                     'fetch', '--depth=1', remote, f'refs/tags/{tag}:refs/tags/{tag}'],
+                    timeout=60,
+                )
+                if result.returncode == 0:
+                    return remote
+                last_error = subprocess.CalledProcessError(result.returncode, result.args)
+            except subprocess.TimeoutExpired as error:
+                last_error = error
+            if attempt < 3:
+                time.sleep(5 * (attempt + 1))
+        print(f'Official source transport unavailable: {remote}', file=sys.stderr)
+    raise last_error
 
 
 def main():
@@ -98,7 +104,7 @@ def main():
         (home / 'gpg.conf').write_text(f'no-default-keyring\nkeyring {home / "release.gpg"}\nno-autostart\n')
         run('git', 'init', '-q', str(repo))
         tag = f'v{version}'
-        fetch_tag(repo, tag)
+        origin = fetch_tag(repo, tag)
         verified = subprocess.run(['git', '-C', str(repo), 'verify-tag', '--raw', tag], env=env, capture_output=True, text=True, check=True)
         if not any(line.startswith('[GNUPG:] VALIDSIG ') and (line.split()[2] == FINGERPRINT or line.split()[-1] == FINGERPRINT) for line in verified.stderr.splitlines()):
             raise RuntimeError('Tag is not signed by the pinned BIRD release key')
@@ -108,7 +114,7 @@ def main():
         raw = subprocess.check_output(['git', '-C', str(repo), 'archive', '--format=tar', f'--prefix=bird-{version}/', f'{tag}^{{commit}}'])
         archive = gzip.compress(raw, mtime=0)
     Path(args.download).write_bytes(archive)
-    values = {'version': version, 'latest': latest, 'minor_latest': max((v for v in versions if v.rsplit('.', 1)[0] == version.rsplit('.', 1)[0]), key=lambda v: tuple(map(int, v.split('.')))), 'sha256': hashlib.sha256(archive).hexdigest(), 'commit': commit, 'signer': FINGERPRINT}
+    values = {'version': version, 'latest': latest, 'minor_latest': max((v for v in versions if v.rsplit('.', 1)[0] == version.rsplit('.', 1)[0]), key=lambda v: tuple(map(int, v.split('.')))), 'sha256': hashlib.sha256(archive).hexdigest(), 'commit': commit, 'signer': FINGERPRINT, 'origin': origin}
     Path('source.json').write_text(json.dumps(values, indent=2) + '\n')
     if args.output:
         with open(args.output, 'a') as f:

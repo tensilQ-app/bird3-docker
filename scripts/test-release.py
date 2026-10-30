@@ -49,10 +49,26 @@ class TransportTests(unittest.TestCase):
         run.return_value = subprocess.CompletedProcess(['git'], 128)
         with self.assertRaises(subprocess.CalledProcessError):
             release.fetch_tag('/tmp/source', 'v3.4.0')
-        self.assertEqual(run.call_count, 4)
-        self.assertEqual([c.args[0] for c in sleep.call_args_list], [5, 10, 15])
-        for call in run.call_args_list:
-            self.assertIn(release.GIT, call.args[0])
+        self.assertEqual(run.call_count, 8)
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [5, 10, 15, 5, 10, 15])
+        for index, call in enumerate(run.call_args_list):
+            self.assertIn(release.GIT if index < 4 else release.MIRROR, call.args[0])
             self.assertIn('http.followRedirects=false', call.args[0])
+
+    @patch.object(release.time, 'sleep')
+    @patch.object(release.subprocess, 'run')
+    def test_official_mirror_after_transport_failure(self, run, sleep):
+        failure = subprocess.CompletedProcess(['git'], 128)
+        success = subprocess.CompletedProcess(['git'], 0)
+        run.side_effect = [failure] * 4 + [success]
+        self.assertEqual(release.fetch_tag('/tmp/source', 'v3.4.0'), release.MIRROR)
+        self.assertEqual(run.call_count, 5)
+        self.assertIn(release.MIRROR, run.call_args.args[0])
+
+    @patch.object(release.subprocess, 'run')
+    def test_primary_success_does_not_use_mirror(self, run):
+        run.return_value = subprocess.CompletedProcess(['git'], 0)
+        self.assertEqual(release.fetch_tag('/tmp/source', 'v3.4.0'), release.GIT)
+        run.assert_called_once()
 
 if __name__ == '__main__': unittest.main()

@@ -20,6 +20,7 @@ permissions:
 jobs:
   source:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     outputs:
       version: ${{ steps.source.outputs.version }}
       latest: ${{ steps.source.outputs.latest }}

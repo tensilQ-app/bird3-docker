@@ -103,13 +103,13 @@ GHCR creates new packages as private by default. After the first staging upload,
 ## Source authentication and supply chain
 
 1. Discover stable versions on `https://bird.nic.cz/get-bird/` over verified HTTPS; restrict redirects to explicit CZ.NIC hosts.
-2. Fetch the exact release tag from `https://gitlab.nic.cz/labs/bird.git`, with Git HTTP redirects disabled.
+2. Fetch the exact release tag from `https://gitlab.nic.cz/labs/bird.git`, with Git HTTP redirects disabled. If this transport remains unavailable after bounded retries (including HTTP 403), use the upstream-owned `https://github.com/CZ-NIC/bird.git` repository as a second official transport.
 3. Verify its OpenPGP signature against the committed key in `keys/bird-release.asc`. The pinned primary fingerprint is **6EFA4F8288F022C523505F30BA756F665CB418E2**, published on the [official BIRD contact page](https://bird.nic.cz/contact/). Verify that the signed `VERSION` file matches the release.
 4. Archive that signed commit, record commit, signer and SHA-256 in `source.json`, and independently verify the archive digest inside each Docker build.
 
-Transient HTTPS/Git transport failures, including HTTP 403, are retried a limited number of times against the same official endpoint. Signature and checksum failures have no fallback.
+Transient HTTPS/Git transport failures, including HTTP 403, are retried a limited number of times against the two explicit official endpoints; the selected origin is recorded in `source.json`. Signature and checksum failures have no fallback.
 
-These are official Git sources, archived locally after signature verification, rather than the unsigned website release tarball. Autoconf generates the build system inside the build stage. An unsigned release, unexpected signer, expired/revoked key, invalid signature or checksum mismatch blocks the build. Key rotation requires maintainer review against upstream's published fingerprint; there is no insecure fallback or automatic trust of new keys.
+These are official Git sources, archived locally after signature verification, rather than the unsigned website release tarball. Autoconf generates the build system inside the build stage. Both official transports must pass the same pinned-key tag signature and signed-version checks. A signature failure does not trigger a mirror retry. An unsigned release, unexpected signer, expired/revoked key, invalid signature or checksum mismatch blocks the build. Key rotation requires maintainer review against upstream's published fingerprint; there is no insecure fallback or automatic trust of new keys.
 
 Each native build exports an OCI archive with BuildKit **SBOM and maximum provenance**. It is loaded for functional tests and scanned by **Trivy**. Any **HIGH/CRITICAL vulnerability with an available fix** blocks publication; failures to download the vulnerability database or run the scanner also fail the job. Unfixed CVEs and lower severities do not block this policy, and a successful scan is not a guarantee of absence of vulnerabilities. Trivy does not replace upstream security review and may not identify every issue in custom-built binaries.
 
