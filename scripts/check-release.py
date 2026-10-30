@@ -10,6 +10,8 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
+import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -35,15 +37,47 @@ def stable_versions(page):
 def run(*args, **kwargs):
     return subprocess.check_output(args, text=True, **kwargs).strip()
 
+def fetch_page():
+    for attempt in range(4):
+        try:
+            with urllib.request.build_opener(OfficialRedirect()).open(PAGE, timeout=60) as response:
+                check_url(response.url)
+                return response.read().decode()
+        except urllib.error.HTTPError as error:
+            if error.code not in {403, 408, 429, 500, 502, 503, 504} or attempt == 3:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == 3:
+                raise
+        time.sleep(5 * (attempt + 1))
+    raise RuntimeError('Official release page unavailable')
+
+
+def fetch_tag(repo, tag):
+    for attempt in range(4):
+        try:
+            result = subprocess.run(
+                ['git', '-C', str(repo), '-c', 'http.followRedirects=false',
+                 'fetch', '--depth=1', GIT, f'refs/tags/{tag}:refs/tags/{tag}'],
+                timeout=180,
+            )
+            if result.returncode == 0:
+                return
+            if attempt == 3:
+                result.check_returncode()
+        except subprocess.TimeoutExpired:
+            if attempt == 3:
+                raise
+        time.sleep(5 * (attempt + 1))
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--version', default='')
     p.add_argument('--download', default='bird.tar.gz')
     p.add_argument('--output', default='')
     args = p.parse_args()
-    with urllib.request.build_opener(OfficialRedirect()).open(PAGE, timeout=60) as response:
-        check_url(response.url)
-        versions = stable_versions(response.read().decode())
+    versions = stable_versions(fetch_page())
     if not versions:
         raise RuntimeError('No stable BIRD 3 releases on the official release page')
     latest = max(versions, key=lambda v: tuple(map(int, v.split('.'))))
@@ -64,7 +98,7 @@ def main():
         (home / 'gpg.conf').write_text(f'no-default-keyring\nkeyring {home / "release.gpg"}\nno-autostart\n')
         run('git', 'init', '-q', str(repo))
         tag = f'v{version}'
-        run('git', '-C', str(repo), '-c', 'http.followRedirects=false', 'fetch', '--depth=1', GIT, f'refs/tags/{tag}:refs/tags/{tag}')
+        fetch_tag(repo, tag)
         verified = subprocess.run(['git', '-C', str(repo), 'verify-tag', '--raw', tag], env=env, capture_output=True, text=True, check=True)
         if not any(line.startswith('[GNUPG:] VALIDSIG ') and (line.split()[2] == FINGERPRINT or line.split()[-1] == FINGERPRINT) for line in verified.stderr.splitlines()):
             raise RuntimeError('Tag is not signed by the pinned BIRD release key')

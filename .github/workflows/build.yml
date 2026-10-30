@@ -12,6 +12,9 @@ on:
         value: ${{ jobs.source.outputs.latest }}
       minor_latest:
         value: ${{ jobs.source.outputs.minor_latest }}
+defaults:
+  run:
+    shell: bash
 permissions:
   contents: read
 jobs:
@@ -76,7 +79,9 @@ jobs:
           sudo apt-get install -y skopeo
           skopeo copy oci-archive:image.tar docker-daemon:bird3-test:${{ matrix.arch }}
       - name: Native functional tests
-        run: bash scripts/test-image.sh bird3-test:${{ matrix.arch }} linux/${{ matrix.arch }} '${{ needs.source.outputs.version }}' | tee runtime-test.txt
+        run: |
+          bash scripts/test-image.sh bird3-test:${{ matrix.arch }} linux/${{ matrix.arch }} '${{ needs.source.outputs.version }}' 2>&1 | tee runtime-test.txt
+          grep -F 'PASS: linux/${{ matrix.arch }} BIRD ${{ needs.source.outputs.version }} ' runtime-test.txt
       - name: Trivy security gate
         run: |
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/work" \

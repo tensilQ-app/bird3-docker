@@ -16,7 +16,7 @@ protocol static test_static6 { ipv6; route 2001:db8::/32 blackhole; }
 protocol direct { disabled; ipv4; ipv6; }
 protocol kernel { disabled; ipv4; }
 protocol kernel { disabled; ipv6; }
-protocol bgp { disabled; local as 64512; neighbor 192.0.2.2 as 64513; ipv4; ipv6; }
+protocol bgp { disabled; local as 64512; neighbor 192.0.2.2 as 64513; ipv4 { import all; export all; }; ipv6 { import all; export all; }; }
 protocol ospf v2 { disabled; ipv4; area 0 { interface "lo"; }; }
 protocol ospf v3 { disabled; ipv6; area 0 { interface "lo"; }; }
 protocol babel { disabled; ipv4; ipv6; interface "lo"; }
@@ -27,7 +27,7 @@ roa4 table rpki4;
 roa6 table rpki6;
 protocol rpki { disabled; roa4 { table rpki4; }; roa6 { table rpki6; }; remote "192.0.2.2" port 323; }
 CONF
-docker run --rm --platform "$platform" "$image" --version | grep -F "BIRD version $version"
+docker run --rm --platform "$platform" "$image" --version 2>&1 | grep -Fx "BIRD version $version"
 if docker run --rm --platform "$platform" "$image" -p -c /etc/bird/bird.conf; then
   echo 'Unexpected success without configuration' >&2; exit 1
 fi
@@ -43,7 +43,8 @@ for n in $(seq 1 30); do
     docker exec "$name" test -S /run/bird/bird.ctl
     docker exec "$name" birdc -s /run/bird/bird.ctl show protocols | tee "$dir/protocols"
     grep -F 'test_static' "$dir/protocols"
-    docker exec "$name" birdc -s /run/bird/bird.ctl show route | tee "$dir/routes"
+    docker exec "$name" birdc -s /run/bird/bird.ctl show route table master4 | tee "$dir/routes"
+    docker exec "$name" birdc -s /run/bird/bird.ctl show route table master6 | tee -a "$dir/routes"
     grep -F '198.51.100.0/24' "$dir/routes"
     grep -F '2001:db8::/32' "$dir/routes"
     docker exec "$name" birdc -s /run/bird/bird.ctl configure check

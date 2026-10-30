@@ -30,7 +30,10 @@ COPY bird.tar.gz /usr/share/bird/source.tar.gz
 COPY Dockerfile /usr/share/bird/Dockerfile
 COPY licenses/ /usr/share/licenses/common/
 # Do not copy the example routing configuration installed by upstream.
-LABEL org.opencontainers.image.title="BIRD 3" \
+LABEL org.opencontainers.image.authors="tensilQ-app <info@tensilq.app>" \
+      org.opencontainers.image.vendor="tensilQ.app" \
+      org.opencontainers.image.url="https://tensilq.app" \
+      org.opencontainers.image.title="BIRD 3" \
       org.opencontainers.image.description="Unofficial BIRD 3 built from signature-verified CZ.NIC sources" \
       org.opencontainers.image.source="https://github.com/tensilQ-app/bird3-docker" \
       org.opencontainers.image.version="$BIRD_VERSION" \

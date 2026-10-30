@@ -1,5 +1,7 @@
 # BIRD 3 OCI images
 
+Maintained by **[tensilQ.app](https://tensilq.app)** (GitHub organization: **tensilQ-app**). Contact: **info@tensilq.app**.
+
 Unofficial, independently maintained multi-architecture images of the [BIRD Internet Routing Daemon](https://bird.nic.cz/), built from **signature-verified official CZ.NIC sources** on Alpine Linux **3.24**. This project is not affiliated with or endorsed by CZ.NIC.
 
 **Image:** `ghcr.io/tensilq-app/bird3` · [Packages](https://github.com/orgs/tensilQ-app/packages/container/package/bird3) · [CI](https://github.com/tensilQ-app/bird3-docker/actions/workflows/ci.yml) · [Releases](https://github.com/tensilQ-app/bird3-docker/actions/workflows/release.yml)
@@ -96,6 +98,10 @@ The Release workflow runs **daily at 05:23 UTC**, after successful main-branch C
 
 Manual dispatch accepts an optional stable `version`. An older explicitly selected version does not update `3` or `latest`. An older patch also does not update its minor-series alias when a newer stable patch is listed upstream. Scheduled GitHub Actions may be disabled after prolonged repository inactivity; check the Actions tab and failure notifications. Dependabot tracks workflow actions and Docker base references.
 
+### First publication
+
+GHCR creates new packages as private by default. After the first staging upload, an organization package administrator must open the package settings and change visibility to **Public**. The release job deliberately fails its anonymous-download gate until this is done; it does not silently publish release aliases for an inaccessible image. Re-run the failed publish job after setting visibility. Subsequent releases reuse the same public package.
+
 ## Source authentication and supply chain
 
 1. Discover stable versions on `https://bird.nic.cz/get-bird/` over verified HTTPS; restrict redirects to explicit CZ.NIC hosts.
@@ -103,13 +109,15 @@ Manual dispatch accepts an optional stable `version`. An older explicitly select
 3. Verify its OpenPGP signature against the committed key in `keys/bird-release.asc`. The pinned primary fingerprint is **6EFA4F8288F022C523505F30BA756F665CB418E2**, published on the [official BIRD contact page](https://bird.nic.cz/contact/). Verify that the signed `VERSION` file matches the release.
 4. Archive that signed commit, record commit, signer and SHA-256 in `source.json`, and independently verify the archive digest inside each Docker build.
 
+Transient HTTPS/Git transport failures, including HTTP 403, are retried a limited number of times against the same official endpoint. Signature and checksum failures have no fallback.
+
 These are official Git sources, archived locally after signature verification, rather than the unsigned website release tarball. Autoconf generates the build system inside the build stage. An unsigned release, unexpected signer, expired/revoked key, invalid signature or checksum mismatch blocks the build. Key rotation requires maintainer review against upstream's published fingerprint; there is no insecure fallback or automatic trust of new keys.
 
 Each native build exports an OCI archive with BuildKit **SBOM and maximum provenance**. It is loaded for functional tests and scanned by **Trivy**. Any **HIGH/CRITICAL vulnerability with an available fix** blocks publication; failures to download the vulnerability database or run the scanner also fail the job. Unfixed CVEs and lower severities do not block this policy, and a successful scan is not a guarantee of absence of vulnerabilities. Trivy does not replace upstream security review and may not identify every issue in custom-built binaries.
 
 Only after **both** architectures pass does the publish job copy those same OCI archives, preserving digests and attestations, to GHCR. It assembles and validates the index, downloads both platforms without credentials, and then promotes the existing index to version aliases. No build occurs during promotion. Build/test/scan failure leaves the previously published `latest` untouched. Registry tag updates are separate operations and cannot be a transaction across all aliases; transient promotion failures may require a rerun. BuildKit provenance describes the build; this project does not currently provide an independent Cosign signature.
 
-Functional checks cover version output, missing/invalid configuration rejection, parsing all required protocol definitions, real daemon startup, active IPv4/IPv6 static routes, a Unix control socket, `birdc show status`, `show protocols`, `show route`, `configure check`, and graceful SIGTERM shutdown. Network-facing protocol definitions are disabled in the fixture: these checks prove availability and basic operation, not interoperability or live adjacency formation for every routing protocol.
+Functional jobs use Bash with `errexit` and `pipefail`, and require an explicit final PASS marker; log capture cannot mask a failed test. Functional checks cover version output, missing/invalid configuration rejection, parsing all required protocol definitions, real daemon startup, active IPv4/IPv6 static routes, a Unix control socket, `birdc show status`, `show protocols`, `show route`, `configure check`, and graceful SIGTERM shutdown. Network-facing protocol definitions are disabled in the fixture: these checks prove availability and basic operation, not interoperability or live adjacency formation for every routing protocol.
 
 Actions artifacts include runtime logs, Trivy JSON, verified sources, source metadata, and tested OCI archives. Release logs and summaries contain the published index digest. SBOM/provenance are registry attestations (additional `unknown/unknown` index entries are expected). These can be inspected with `docker buildx imagetools inspect` and tools supporting OCI attestations.
 
