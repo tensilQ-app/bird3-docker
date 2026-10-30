@@ -21,7 +21,7 @@ jobs:
       sha256: ${{ steps.source.outputs.sha256 }}
       commit: ${{ steps.source.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: python3 scripts/test-release.py
       - run: bash -n scripts/test-image.sh
       - name: Verify official release signature and archive sources
@@ -48,7 +48,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with:
           name: verified-source
