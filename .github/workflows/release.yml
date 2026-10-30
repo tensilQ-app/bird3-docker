@@ -2,92 +2,113 @@ name: Release BIRD 3
 on:
   schedule:
     - cron: '23 5 * * *'
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Stable upstream version (blank = latest)'
-        required: false
+        description: 'Official stable version (blank = latest)'
         type: string
-      rebuild:
-        description: 'Rebuild and republish existing version (refresh dependencies)'
         required: false
-        default: false
-        type: boolean
 permissions:
   contents: read
 concurrency:
   group: bird3-release
   cancel-in-progress: false
 jobs:
-  release:
+  build:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ inputs.version || '' }}
+  publish:
+    needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: Download official stable release
-        id: source
-        shell: bash
-        env:
-          REQUESTED_VERSION: ${{ inputs.version || '' }}
-        run: |
-          set -euo pipefail
-          python3 scripts/check-release.py --version "$REQUESTED_VERSION" --output "$GITHUB_OUTPUT"
-      - name: Decide whether to publish
-        id: decision
-        shell: bash
-        env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/bird3
-          VERSION: ${{ steps.source.outputs.version }}
-          REBUILD: ${{ inputs.rebuild || false }}
-        run: |
-          set -euo pipefail
-          echo "image=${IMAGE,,}" >> "$GITHUB_OUTPUT"
-          if [ "$REBUILD" != "true" ] && docker manifest inspect "${IMAGE,,}:$VERSION" >/dev/null 2>&1; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "Version already published; skipping."
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: docker/setup-qemu-action@v3
-        if: steps.decision.outputs.publish == 'true'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: image-*
+          path: images
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-source
+          path: source
       - uses: docker/setup-buildx-action@v3
-        if: steps.decision.outputs.publish == 'true'
-      - name: Build and runtime-test each architecture
-        if: steps.decision.outputs.publish == 'true'
-        shell: bash
-        env:
-          VERSION: ${{ steps.source.outputs.version }}
-          SHA256: ${{ steps.source.outputs.sha256 }}
-        run: |
-          set -euo pipefail
-          for arch in amd64 arm64; do
-            docker buildx build --platform "linux/$arch" --load \
-              --build-arg "BIRD_VERSION=$VERSION" --build-arg "BIRD_SHA256=$SHA256" \
-              -t "bird3-test:$arch" .
-            bash scripts/test-image.sh "bird3-test:$arch" "linux/$arch" "$VERSION"
-          done
-      - name: Login to GHCR
-        if: steps.decision.outputs.publish == 'true'
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish tested multi-architecture image
-        if: steps.decision.outputs.publish == 'true'
-        shell: bash
+      - name: Publish tested archives and revision manifest
+        id: publish
         env:
-          IMAGE: ${{ steps.decision.outputs.image }}
-          VERSION: ${{ steps.source.outputs.version }}
-          SHA256: ${{ steps.source.outputs.sha256 }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
-          minor="${VERSION%.*}"
-          docker buildx build --platform linux/amd64,linux/arm64 \
-            --build-arg "BIRD_VERSION=$VERSION" --build-arg "BIRD_SHA256=$SHA256" \
-            --provenance=true --sbom=true --push \
-            -t "$IMAGE:$VERSION" -t "$IMAGE:$minor" -t "$IMAGE:3" -t "$IMAGE:latest" .
-          docker buildx imagetools inspect "$IMAGE:$VERSION"
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/bird3"
+          revision="$VERSION-r${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          printf '%s' "$GH_TOKEN" | skopeo login --username "$GITHUB_ACTOR" --password-stdin ghcr.io
+          for arch in amd64 arm64; do
+            skopeo copy --all --preserve-digests "oci-archive:images/image-$arch/image.tar" "docker://$image:$revision-$arch"
+          done
+          docker buildx imagetools create -t "$image:$revision" "$image:$revision-amd64" "$image:$revision-arm64"
+          docker buildx imagetools inspect --raw "$image:$revision" > manifest.json
+          python3 - <<'PY'
+          import json
+          m = json.load(open('manifest.json'))['manifests']
+          platforms = [(x.get('platform', {}).get('os'), x.get('platform', {}).get('architecture')) for x in m]
+          assert platforms.count(('linux', 'amd64')) == 1, platforms
+          assert platforms.count(('linux', 'arm64')) == 1, platforms
+          assert len(m) >= 4, 'SBOM/provenance attestation manifests are missing'
+          PY
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - name: Verify anonymous access before moving release tags
+        env:
+          IMAGE: ${{ steps.publish.outputs.image }}
+          REVISION: ${{ steps.publish.outputs.revision }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/anonymous
+          printf '{"auths":{}}' > /tmp/anonymous/config.json
+          for arch in amd64 arm64; do
+            skopeo copy --src-authfile /tmp/anonymous/config.json --override-os linux --override-arch "$arch" \
+              "docker://$IMAGE:$REVISION" "dir:/tmp/anonymous/$arch"
+          done
+      - name: Promote verified revision to version aliases
+        env:
+          IMAGE: ${{ steps.publish.outputs.image }}
+          REVISION: ${{ steps.publish.outputs.revision }}
+          VERSION: ${{ needs.build.outputs.version }}
+          LATEST: ${{ needs.build.outputs.latest }}
+        run: |
+          set -euo pipefail
+          # Promote the existing manifest; never rebuild after tests.
+          args=(-t "$IMAGE:$VERSION" -t "$IMAGE:${VERSION%.*}")
+          if [ "$VERSION" = "$LATEST" ]; then args+=(-t "$IMAGE:3" -t "$IMAGE:latest"); fi
+          docker buildx imagetools create "${args[@]}" "$IMAGE:$REVISION"
+          docker buildx imagetools inspect "$IMAGE:$REVISION" | tee release.txt
+          {
+            echo "## Published BIRD $VERSION"
+            echo "Image: \`$IMAGE:$REVISION\`"
+            echo 'Native AMD64 and ARM64 functional tests and Trivy gate passed.'
+            echo 'Anonymous downloads verified for both architectures.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-metadata
+          path: |
+            manifest.json
+            release.txt
+            source/source.json

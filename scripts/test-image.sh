@@ -5,33 +5,51 @@ platform="${2:?platform required}"
 version="${3:?version required}"
 dir="$(mktemp -d)"
 name="bird3-test-$$-$RANDOM"
-cleanup() {
-  docker rm -f "$name" >/dev/null 2>&1 || true
-  rm -rf "$dir"
-}
+cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; rm -rf "$dir"; }
 trap cleanup EXIT
 cat > "$dir/bird.conf" <<'CONF'
 log stderr all;
 router id 192.0.2.1;
 protocol device { }
-protocol static test_static { ipv4; }
+protocol static test_static { ipv4; route 198.51.100.0/24 blackhole; }
+protocol static test_static6 { ipv6; route 2001:db8::/32 blackhole; }
+protocol direct { disabled; ipv4; ipv6; }
+protocol kernel { disabled; ipv4; }
+protocol kernel { disabled; ipv6; }
+protocol bgp { disabled; local as 64512; neighbor 192.0.2.2 as 64513; ipv4; ipv6; }
+protocol ospf v2 { disabled; ipv4; area 0 { interface "lo"; }; }
+protocol ospf v3 { disabled; ipv6; area 0 { interface "lo"; }; }
+protocol babel { disabled; ipv4; ipv6; interface "lo"; }
+protocol bfd { disabled; interface "*"; }
+protocol rip { disabled; ipv4; interface "lo"; }
+protocol rip ng { disabled; ipv6; interface "lo"; }
+roa4 table rpki4;
+roa6 table rpki6;
+protocol rpki { disabled; roa4 { table rpki4; }; roa6 { table rpki6; }; remote "192.0.2.2" port 323; }
 CONF
-docker run --rm --platform "$platform" --entrypoint /usr/sbin/bird "$image" --version | grep -F "$version"
-docker run --rm --platform "$platform" --entrypoint /usr/sbin/bird "$image" -p -c /etc/bird/bird.conf -s /run/bird/bird.ctl -d >/dev/null 2>&1 && {
-  echo "Unexpected success without mounted configuration" >&2; exit 1;
-} || true
-docker run --rm --platform "$platform" -v "$dir/bird.conf:/etc/bird/bird.conf:ro" \
-  --entrypoint /usr/sbin/bird "$image" -p -c /etc/bird/bird.conf
-docker run -d --name "$name" --platform "$platform" \
-  -v "$dir/bird.conf:/etc/bird/bird.conf:ro" "$image" >/dev/null
+docker run --rm --platform "$platform" "$image" --version | grep -F "BIRD version $version"
+if docker run --rm --platform "$platform" "$image" -p -c /etc/bird/bird.conf; then
+  echo 'Unexpected success without configuration' >&2; exit 1
+fi
+printf 'invalid syntax;\n' > "$dir/invalid.conf"
+if docker run --rm --platform "$platform" -v "$dir/invalid.conf:/tmp/invalid.conf:ro" "$image" -p -c /tmp/invalid.conf; then
+  echo 'Invalid configuration was accepted' >&2; exit 1
+fi
+docker run --rm --platform "$platform" -v "$dir/bird.conf:/etc/bird/bird.conf:ro" "$image" -p -c /etc/bird/bird.conf
+docker run -d --name "$name" --platform "$platform" -v "$dir/bird.conf:/etc/bird/bird.conf:ro" "$image" >/dev/null
 for n in $(seq 1 30); do
-  if docker exec "$name" /usr/sbin/birdc -s /run/bird/bird.ctl 'show status' > "$dir/status" 2>&1; then
-    grep -F "BIRD" "$dir/status"
-    docker exec "$name" /usr/sbin/birdc -s /run/bird/bird.ctl 'show protocols' > "$dir/protocols"
-    grep -F "test_static" "$dir/protocols"
+  if docker exec "$name" birdc -s /run/bird/bird.ctl show status > "$dir/status" 2>&1; then
+    grep -F 'Daemon is up and running' "$dir/status"
+    docker exec "$name" test -S /run/bird/bird.ctl
+    docker exec "$name" birdc -s /run/bird/bird.ctl show protocols | tee "$dir/protocols"
+    grep -F 'test_static' "$dir/protocols"
+    docker exec "$name" birdc -s /run/bird/bird.ctl show route | tee "$dir/routes"
+    grep -F '198.51.100.0/24' "$dir/routes"
+    grep -F '2001:db8::/32' "$dir/routes"
+    docker exec "$name" birdc -s /run/bird/bird.ctl configure check
     docker stop -t 10 "$name" >/dev/null
     test "$(docker inspect -f '{{.State.ExitCode}}' "$name")" = 0
-    echo "PASS: $platform"
+    echo "PASS: $platform BIRD $version (parse, protocols, IPv4/IPv6 routes, socket, birdc, shutdown)"
     exit 0
   fi
   sleep 1

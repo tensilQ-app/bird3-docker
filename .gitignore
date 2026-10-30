@@ -1,0 +1,5 @@
+bird.tar.gz
+source.json
+__pycache__/
+*.pyc
+image.tar

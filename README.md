@@ -1,28 +1,26 @@
-# BIRD 3 Docker images
+# BIRD 3 OCI images
 
-**Unofficial** multi-architecture container images of [BIRD Internet Routing Daemon](https://bird.nic.cz/), compiled from official CZ.NIC release archives. This project is not affiliated with or endorsed by CZ.NIC.
+Unofficial, independently maintained multi-architecture images of the [BIRD Internet Routing Daemon](https://bird.nic.cz/), built from **signature-verified official CZ.NIC sources** on Alpine Linux **3.24**. This project is not affiliated with or endorsed by CZ.NIC.
 
-Image: `ghcr.io/tensilq-app/bird3` (after the first successful release and package visibility is set to public).
+**Image:** `ghcr.io/tensilq-app/bird3` · [Packages](https://github.com/orgs/tensilQ-app/packages/container/package/bird3) · [CI](https://github.com/tensilQ-app/bird3-docker/actions/workflows/ci.yml) · [Releases](https://github.com/tensilQ-app/bird3-docker/actions/workflows/release.yml)
 
-## Supported platforms and routing features
+## Platforms and features
 
-- `linux/amd64`, `linux/arm64`
-- Upstream BIRD 3 routing features, including BGP, OSPFv2/v3, RIP, Babel, BFD, RPKI, static, direct, kernel, and IPv4/IPv6.
-- Build includes libssh for RPKI support. No protocols are disabled using `--with-protocols`.
-- Runtime contains BIRD, `birdc`, `birdcl`, and required shared libraries.
+Native builds and runtime tests run on **linux/amd64** and **linux/arm64**. No emulation is used in release validation. All standard upstream protocols remain enabled, including BGP, OSPFv2/v3, Babel, BFD, RIP/RIPng, RPKI, IPv4/IPv6, kernel, direct and static; libssh support is explicitly required. The image contains `bird`, `birdc`, `birdcl`, their runtime libraries, license notices and corresponding BIRD source. Build tools remain in a separate build stage.
 
-## Tags
+The image contains **no default routing configuration**, user infrastructure settings, service integration or supervisor. BIRD runs as PID 1 and logs to stderr. Linux kernel support and networking permissions remain the deployment's responsibility.
 
-- `3.4.0`: specific upstream version
-- `3.4`: latest patch version in the 3.4 series
-- `3`, `latest`: latest stable BIRD 3
-- `3.4.0-rN`: explicitly requested image rebuild of a particular upstream release
+## Quick start
 
-The full-version tag is left unchanged on ordinary scheduled runs. Moving tags are updated only after both architectures pass container runtime tests. For reproducible deployments, pin a digest instead of a moving tag.
+Create `bird.conf` (a safe configuration for trying the image without exchanging or installing routes):
 
-## Usage
-
-Provide your own BIRD configuration at `/etc/bird/bird.conf`. There is **no bundled routing configuration**. Example Docker Compose configuration:
+```bird
+log stderr all;
+router id 192.0.2.1;
+protocol device { }
+protocol static { ipv4; }
+protocol static { ipv6; }
+```
 
 ```yaml
 services:
@@ -31,45 +29,130 @@ services:
     restart: unless-stopped
     volumes:
       - ./bird.conf:/etc/bird/bird.conf:ro
+    healthcheck:
+      test: ["CMD", "birdc", "-s", "/run/bird/bird.ctl", "show", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 ```
 
-This example deliberately does not prescribe a network mode, capabilities, or interfaces. Routing daemons generally need extra network permissions and a suitable network namespace for operational routing. Set these according to your environment and risk model. BIRD does not itself require `privileged: true` as a blanket setting.
-
-The container runs `bird -d -c /etc/bird/bird.conf -s /run/bird/bird.ctl`. `-d` keeps it in foreground and logs diagnostics to stderr (visible in `docker logs`). The socket stays inside the container by default.
-
 ```sh
-docker run --rm ghcr.io/tensilq-app/bird3:3 bird --version
-docker image inspect ghcr.io/tensilq-app/bird3:3 --format '{{.Os}}/{{.Architecture}}'
-docker exec <container> birdc -s /run/bird/bird.ctl show status
-docker logs <container>
+docker compose up -d
+docker compose logs bird
+docker compose exec bird birdc -s /run/bird/bird.ctl show status
+docker compose exec bird birdc -s /run/bird/bird.ctl show protocols
+docker compose exec bird birdc -s /run/bird/bird.ctl configure check
+docker compose exec bird birdc -s /run/bird/bird.ctl configure
 ```
 
-For multi-platform index inspection:
+The entrypoint is `/usr/sbin/bird`; arguments replace the default `-d -c /etc/bird/bird.conf -s /run/bird/bird.ctl`:
 
 ```sh
+docker run --rm ghcr.io/tensilq-app/bird3:3 --version
+docker run --rm -v "$PWD/bird.conf:/etc/bird/bird.conf:ro" ghcr.io/tensilq-app/bird3:3 -p -c /etc/bird/bird.conf
 docker buildx imagetools inspect ghcr.io/tensilq-app/bird3:3
 ```
 
-For a sidecar deployment, `network_mode: service:<name>` is possible but **must be configured by the user**, along with permissions and lifecycle coordination. For production, mount the configuration read-only and explicitly scope network access, privileges, and access to the control socket.
+Do not add `bird` before the arguments: it is already the entrypoint. For a shell, use `--entrypoint /bin/sh`.
 
-## How releases work
+### Operational routing example
 
-`Release` workflow checks the official [CZ.NIC release page](https://bird.nic.cz/get-bird/) on a daily schedule and on manual dispatch. It selects the highest strictly numeric `3.x.y` release listed by CZ.NIC (no RC, beta or prerelease), and downloads the tarball from CZ.NIC over HTTPS. It computes SHA-256 once and passes the digest to **every** Docker build; the Dockerfile verifies the archive bytes independently. The jobs compile and launch BIRD on both supported platforms and run `birdc` before publication. Publication requires both tests to pass.
+For a Linux host whose routes BIRD should manage, the following Compose settings share the host network namespace and permit route operations. Review your configuration before enabling them: kernel protocol exports can change host connectivity.
 
-**Source authenticity limitation:** The upstream release page does not currently expose an independently authenticated tarball SHA-256 or tarball signature verified by this workflow. TLS, the official download host, and consistent SHA-256 protect the download/build handoff but **do not constitute independent upstream signing**. The published upstream Git commit shown on the download page is informational, not a verified signature of tarball contents. Do not interpret this process as cryptographic proof of the upstream author's identity.
+```yaml
+services:
+  bird:
+    image: ghcr.io/tensilq-app/bird3:3
+    network_mode: host
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW, NET_BIND_SERVICE]
+    read_only: true
+    tmpfs:
+      - /run/bird:mode=0755
+    volumes:
+      - ./bird.conf:/etc/bird/bird.conf:ro
+    restart: unless-stopped
+```
 
-Manual release dispatch options:
-- `version`: specific stable version already listed on CZ.NIC, or blank for latest.
-- `rebuild`: opt in to republishing the same version to refresh base libraries. Use with care: an existing version tag may move; prefer a distinct revision tag for immutable deployments.
+Host networking has Linux-specific semantics. Bridge, macvlan, or another container's network namespace can also be used; choose the namespace containing the interfaces and routes you intend to control. IPv6, forwarding, multicast reachability, firewall policy and kernel features must be configured outside the image. Blanket `privileged: true` is unnecessary. The process uses root by default; reduce capabilities according to your protocols. The Unix control socket grants administrative access to BIRD: do not expose it to untrusted users or over TCP. `birdc -r` can restrict client commands, but socket filesystem permissions remain the primary access boundary.
 
-Builds depend on Debian base image and package repository versions, which can change. Image rebuilding is therefore not byte-for-byte reproducible by default. To rebuild against patched base libraries, run the release workflow with `rebuild=true`, review the results and consider pinning the image by digest. This project does not update users' running containers.
+## Tags and updates
 
-GitHub may disable scheduled workflows after prolonged inactivity; maintainers should review the Actions tab regularly. CI also tests changes on pull requests without publishing images. Publication needs `packages: write` on the release workflow.
+| Tag | Meaning |
+| --- | --- |
+| `3.4.0` | Most recent successful build of that upstream version |
+| `3.4` | Most recently published patch in the selected minor series |
+| `3`, `latest` | Latest stable BIRD 3 |
+| `3.4.0-rN.A` | Retained rebuild revision: workflow run number N, attempt A |
+| `3.4.0-rN.A-amd64`, `3.4.0-rN.A-arm64` | Architecture staging indexes used for promotion |
 
-## Licensing and upstream attribution
+Version examples are illustrative. All ordinary version aliases can move when dependencies are refreshed. Revision tags are not intentionally overwritten; registry administrators can still delete or change tags. **Pin the multi-platform digest** for immutable deployments:
 
-[BIRD](https://bird.nic.cz/) is maintained by CZ.NIC and its contributors and is distributed under **GNU General Public License version 2 or later (GPL-2.0-or-later)**. The BIRD code and notices are not authored by this project. Official source archives are available from [CZ.NIC downloads](https://bird.nic.cz/get-bird/); the source archive matching each image version can be retrieved from the upstream release site. Source code should remain available to recipients in compliance with the GPL, including corresponding build instructions.
+```yaml
+image: ghcr.io/tensilq-app/bird3@sha256:REPLACE_WITH_INDEX_DIGEST
+```
 
-This repository's packaging scripts, examples and automation are offered under MIT (see [LICENSE](LICENSE)); that license does **not** replace BIRD's GPL or the licenses of any included third-party components. Runtime images include Debian and library components, each subject to their respective licenses. Debian copyright/license metadata is retained in the image under `/usr/share/doc` where installed.
+The Release workflow runs **daily at 05:23 UTC**, after successful main-branch CI, and on manual dispatch. It selects the highest strictly numeric `3.x.y` version explicitly listed on the official release page; beta/RC/prerelease names are rejected. Every run rebuilds both platforms with fresh `alpine:3.24` pulls, disabled build cache, and `apk upgrade --no-cache` in both stages, even when BIRD has not changed. It never changes users' running containers. Alpine release-line changes require a reviewed repository change.
 
-Report BIRD bugs to upstream; report container packaging and build issues to this repository.
+Manual dispatch accepts an optional stable `version`. An older explicitly selected version does not update `3` or `latest`. Maintainers should avoid republishing an older patch into a minor-series alias currently pointing to a newer patch. Scheduled GitHub Actions may be disabled after prolonged repository inactivity; check the Actions tab and failure notifications. Dependabot tracks workflow actions and Docker base references.
+
+## Source authentication and supply chain
+
+1. Discover stable versions on `https://bird.nic.cz/get-bird/` over verified HTTPS; restrict redirects to explicit CZ.NIC hosts.
+2. Fetch the exact release tag from `https://gitlab.nic.cz/labs/bird.git`, with Git HTTP redirects disabled.
+3. Verify its OpenPGP signature against the committed key in `keys/bird-release.asc`. The pinned primary fingerprint is **6EFA4F8288F022C523505F30BA756F665CB418E2**, published on the [official BIRD contact page](https://bird.nic.cz/contact/). Verify that the signed `VERSION` file matches the release.
+4. Archive that signed commit, record commit, signer and SHA-256 in `source.json`, and independently verify the archive digest inside each Docker build.
+
+These are official Git sources, archived locally after signature verification, rather than the unsigned website release tarball. Autoconf generates the build system inside the build stage. An unsigned release, unexpected signer, expired/revoked key, invalid signature or checksum mismatch blocks the build. Key rotation requires maintainer review against upstream's published fingerprint; there is no insecure fallback or automatic trust of new keys.
+
+Each native build exports an OCI archive with BuildKit **SBOM and maximum provenance**. It is loaded for functional tests and scanned by **Trivy**. Any **HIGH/CRITICAL vulnerability with an available fix** blocks publication; failures to download the vulnerability database or run the scanner also fail the job. Unfixed CVEs and lower severities do not block this policy, and a successful scan is not a guarantee of absence of vulnerabilities. Trivy does not replace upstream security review and may not identify every issue in custom-built binaries.
+
+Only after **both** architectures pass does the publish job copy those same OCI archives, preserving digests and attestations, to GHCR. It assembles and validates the index, downloads both platforms without credentials, and then promotes the existing index to version aliases. No build occurs during promotion. Build/test/scan failure leaves the previously published `latest` untouched. Registry tag updates are separate operations and cannot be a transaction across all aliases; transient promotion failures may require a rerun. BuildKit provenance describes the build; this project does not currently provide an independent Cosign signature.
+
+Functional checks cover version output, missing/invalid configuration rejection, parsing all required protocol definitions, real daemon startup, active IPv4/IPv6 static routes, a Unix control socket, `birdc show status`, `show protocols`, `show route`, `configure check`, and graceful SIGTERM shutdown. Network-facing protocol definitions are disabled in the fixture: these checks prove availability and basic operation, not interoperability or live adjacency formation for every routing protocol.
+
+Actions artifacts include runtime logs, Trivy JSON, verified sources, source metadata, and tested OCI archives. Release logs and summaries contain the published index digest. SBOM/provenance are registry attestations (additional `unknown/unknown` index entries are expected). These can be inspected with `docker buildx imagetools inspect` and tools supporting OCI attestations.
+
+### Local development
+
+Requires Python 3, Git, GnuPG, Docker with Buildx, and network access to upstream services:
+
+```sh
+python3 scripts/test-release.py
+python3 scripts/check-release.py
+VERSION=$(python3 -c 'import json; print(json.load(open("source.json"))["version"])')
+SHA256=$(python3 -c 'import json; print(json.load(open("source.json"))["sha256"])')
+docker build --pull --no-cache --build-arg BIRD_VERSION="$VERSION" --build-arg BIRD_SHA256="$SHA256" -t bird3-local .
+bash scripts/test-image.sh bird3-local linux/amd64 "$VERSION"
+```
+
+Use `linux/arm64` on ARM64 hosts. Cross-platform local builds require emulation or a remote builder; release checks always run natively. Package repositories change over time, so dependency-refresh builds are not byte-for-byte reproducible. The signed source commit and archive checksum remain recorded for auditing.
+
+## Licensing and corresponding source
+
+BIRD is maintained by **CZ.NIC and its contributors** and licensed under **GPL-2.0-or-later**. Its existing copyright and source notices remain intact. The BMP component's upstream license notice is retained. Repository packaging, automation and examples are MIT-licensed; see [LICENSE](LICENSE). MIT does not replace BIRD's GPL or any dependency license.
+
+The **exact corresponding BIRD source archive** is included in every runtime image at `/usr/share/bird/source.tar.gz`, together with `/usr/share/bird/Dockerfile` build instructions. Extract it without launching the daemon:
+
+```sh
+id=$(docker create ghcr.io/tensilq-app/bird3:3)
+docker cp "$id:/usr/share/bird/source.tar.gz" ./bird-source.tar.gz
+docker cp "$id:/usr/share/bird/Dockerfile" ./Dockerfile
+docker rm "$id"
+```
+
+Official sources are also available from [CZ.NIC GitLab](https://gitlab.nic.cz/labs/bird/) at the recorded signed tag/commit. The unmodified source, this Dockerfile and recorded build arguments describe the BIRD build. Included source intentionally adds a small amount to image size to keep it available with each distributed binary.
+
+Third-party components keep their own licenses: Alpine/musl and ncurses use permissive licenses; BusyBox uses GPL-2.0; readline uses GPL-3.0-or-later; libssh uses LGPL-2.1-or-later; OpenSSL uses Apache-2.0; the CA certificate collection contains Mozilla-licensed material. Transitive packages may add other licenses. Consult the exact image's `/lib/apk/db/installed`, common license texts in `/usr/share/licenses`, SBOM, and [Alpine package/source records](https://pkgs.alpinelinux.org/) for the package versions and corresponding sources. These notices are informational and do not relicense third-party components.
+
+## Security and support
+
+Report packaging issues through [GitHub issues](https://github.com/tensilQ-app/bird3-docker/issues). Avoid publishing secrets or unpatched vulnerability details in public issues. For BIRD vulnerabilities use [upstream security reporting](https://bird.nic.cz/contact/); see [SECURITY.md](SECURITY.md) for container reports. Review release scan reports, upstream advisories and your routing policy before deployment. There is no security response SLA.
+
+### Development
+
+This project is independently maintained and uses AI-assisted development tools, including OpenAI ChatGPT, for code generation, review, testing, and documentation.
+
+All project decisions, maintenance, and responsibility for published container images remain with the project maintainers.
+
+This project is not affiliated with or endorsed by OpenAI or CZ.NIC.
