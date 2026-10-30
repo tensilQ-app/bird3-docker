@@ -47,6 +47,19 @@ docker compose exec bird birdc -s /run/bird/bird.ctl configure check
 docker compose exec bird birdc -s /run/bird/bird.ctl configure
 ```
 
+Run these Compose commands from the directory containing `compose.yaml` or `docker-compose.yml`, or specify the file explicitly with `docker compose -f /path/to/compose.yaml ...`. If Compose cannot find a configuration file, it reports `no configuration file provided: not found`.
+
+To manage an already running container without a Compose file, use `docker exec`:
+
+```sh
+docker exec <container_name> birdc -s /run/bird/bird.ctl show status
+docker exec <container_name> birdc -s /run/bird/bird.ctl show protocols
+docker exec <container_name> birdc -s /run/bird/bird.ctl configure check
+docker exec <container_name> birdc -s /run/bird/bird.ctl configure
+```
+
+Replace `<container_name>` with the actual container name or ID.
+
 The entrypoint is `/usr/sbin/bird`; arguments replace the default `-d -c /etc/bird/bird.conf -s /run/bird/bird.ctl`:
 
 ```sh
