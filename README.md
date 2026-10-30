@@ -8,7 +8,7 @@ Unofficial, independently maintained multi-architecture images of the [BIRD Inte
 
 ## Platforms and features
 
-Native builds and runtime tests run on **linux/amd64** and **linux/arm64**. No emulation is used in release validation. All standard upstream protocols remain enabled, including BGP, OSPFv2/v3, Babel, BFD, RIP/RIPng, RPKI, IPv4/IPv6, kernel, direct and static; libssh support is explicitly required. The image contains `bird`, `birdc`, `birdcl`, their runtime libraries, license notices and corresponding BIRD source. Build tools remain in a separate build stage.
+Native builds and runtime tests run on **linux/amd64** and **linux/arm64**. No emulation is used in release validation. All standard upstream protocols remain enabled, including BGP, OSPFv2/v3, Babel, BFD, RIP/RIPng, RPKI, IPv4/IPv6, kernel, direct and static; libssh support is explicitly required. The image contains `bird`, `birdc`, `birdcl`, their runtime libraries, license notices and corresponding BIRD source. Build tools remain in a separate build stage. The default Dockerfile has only a build stage and a minimal runtime stage.
 
 The image contains **no default routing configuration**, user infrastructure settings, service integration or supervisor. BIRD runs as PID 1 and logs to stderr. Linux kernel support and networking permissions remain the deployment's responsibility.
 
@@ -119,7 +119,11 @@ Only after **both** architectures pass does the publish job copy those same OCI 
 
 Functional jobs use Bash with `errexit` and `pipefail`, and require an explicit final PASS marker; log capture cannot mask a failed test. Functional checks cover version output, missing/invalid configuration rejection, parsing all required protocol definitions, real daemon startup, active IPv4/IPv6 static routes, a Unix control socket, `birdc show status`, `show protocols`, `show route`, `configure check`, and graceful SIGTERM shutdown. Network-facing protocol definitions are disabled in the fixture: these checks prove availability and basic operation, not interoperability or live adjacency formation for every routing protocol.
 
-Actions artifacts include runtime logs, Trivy JSON, verified sources, source metadata, and tested OCI archives. Release logs and summaries contain the published index digest. SBOM/provenance are registry attestations (additional `unknown/unknown` index entries are expected). These can be inspected with `docker buildx imagetools inspect` and tools supporting OCI attestations.
+Actions artifacts include runtime logs, Trivy JSON, verified sources, source metadata, and tested OCI archives. Release logs and summaries contain the published index digest. After a successful release the workflow attempts to remove the known-invalid bootstrap revision `3.4.0-r3.1` and its architecture staging tags; package-administration permission failures appear as cleanup warnings. Do not deploy that revision from an old local cache. SBOM/provenance are registry attestations (additional `unknown/unknown` index entries are expected). These can be inspected with `docker buildx imagetools inspect` and tools supporting OCI attestations.
+
+### Alpine build compatibility
+
+Optional link-time optimization (LTO) is disabled with upstream's `--disable-lto` configure option. The BIRD 3.4.0 route exporter uses extended structures; in the Alpine/GCC LTO build, Fortify's source-size check traps while announcing even a basic static route. The non-LTO build passes the same native IPv4/IPv6 regression checks on both platforms. Optimization remains enabled, Fortify remains enabled and is asserted during the build, and no BIRD source patches or security-check bypasses are applied. This is a build compatibility choice, not a reduction of supported protocols.
 
 ### Local development
 
