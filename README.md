@@ -1,7 +1,5 @@
 # BIRD 3 OCI images
 
-Maintained by **[tensilQ.app](https://tensilq.app)** (GitHub organization: **tensilQ-app**). Contact: **info@tensilq.app**.
-
 Unofficial, independently maintained multi-architecture images of the [BIRD Internet Routing Daemon](https://bird.nic.cz/), built from **signature-verified official CZ.NIC sources** on Alpine Linux **3.24**. This project is not affiliated with or endorsed by CZ.NIC.
 
 **Image:** `ghcr.io/tensilq-app/bird3` · [Packages](https://github.com/orgs/tensilQ-app/packages/container/package/bird3) · [CI](https://github.com/tensilQ-app/bird3-docker/actions/workflows/ci.yml) · [Releases](https://github.com/tensilQ-app/bird3-docker/actions/workflows/release.yml)
