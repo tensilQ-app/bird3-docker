@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import urllib.request
+from urllib.parse import urlsplit
 from pathlib import Path
 
 PAGE = "https://bird.nic.cz/get-bird/"
@@ -16,7 +17,7 @@ VERSION = re.compile(r"(?<![0-9A-Za-z.-])3\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)
 def get(url):
     request = urllib.request.Request(url, headers={"User-Agent": "bird3-docker-release-check/1"})
     with urllib.request.urlopen(request, timeout=35) as response:
-        if response.url.split("/")[2] != "bird.nic.cz":
+        if urlsplit(response.url).scheme != "https" or urlsplit(response.url).hostname not in {"bird.nic.cz", "gitlab.nic.cz"}:
             raise RuntimeError("Unexpected redirect host")
         return response.read()
 
