@@ -29,7 +29,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: python3 scripts/check-release.py --version "$VERSION" --output "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: verified-source
           path: |
@@ -82,14 +82,14 @@ jobs:
             bird3-test:${{ matrix.arch }}
       - name: Preserve reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: reports-${{ matrix.arch }}
           path: |
             runtime-test.txt
             trivy.json
       - name: Preserve successfully tested OCI archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: image-${{ matrix.arch }}
           path: image.tar
