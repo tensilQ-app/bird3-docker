@@ -6,7 +6,7 @@ Unofficial, independently maintained multi-architecture images of the [BIRD Inte
 
 ## Platforms and features
 
-Native builds and runtime tests run on **linux/amd64** and **linux/arm64**. No emulation is used in release validation. All standard upstream protocols remain enabled, including BGP, OSPFv2/v3, Babel, BFD, RIP/RIPng, RPKI, IPv4/IPv6, kernel, direct and static; libssh support is explicitly required. The image contains `bird`, `birdc`, `birdcl`, their runtime libraries, license notices and corresponding BIRD source. Build tools remain in a separate build stage. The default Dockerfile has only a build stage and a minimal runtime stage.
+Native builds and runtime tests run on **linux/amd64** and **linux/arm64**. No emulation is used in release validation. All standard upstream protocols remain enabled, including BGP, OSPFv2/v3, Babel, BFD, RIP/RIPng, RPKI, IPv4/IPv6, kernel, direct and static; libssh support is explicitly required. The image contains `bird`, `birdc`, `birdcl`, their runtime libraries, license notices and corresponding BIRD source. Build tools are excluded from the runtime image.
 
 The image contains **no default routing configuration**, user infrastructure settings, service integration or supervisor. BIRD runs as PID 1 and logs to stderr. Linux kernel support and networking permissions remain the deployment's responsibility.
 
@@ -84,7 +84,6 @@ Host networking has Linux-specific semantics. Bridge, macvlan, or another contai
 | `3.4` | Latest stable patch in the selected minor series |
 | `3`, `latest` | Latest stable BIRD 3 |
 | `3.4.0-rN.A` | Retained rebuild revision: workflow run number N, attempt A |
-| `3.4.0-rN.A-amd64`, `3.4.0-rN.A-arm64` | Architecture staging indexes used for promotion |
 
 Version examples are illustrative. All ordinary version aliases can move when dependencies are refreshed. Revision tags are not intentionally overwritten; registry administrators can still delete or change tags. **Pin the multi-platform digest** for immutable deployments:
 
@@ -92,51 +91,23 @@ Version examples are illustrative. All ordinary version aliases can move when de
 image: ghcr.io/tensilq-app/bird3@sha256:REPLACE_WITH_INDEX_DIGEST
 ```
 
-The Release workflow runs **daily at 05:23 UTC**, after successful main-branch CI, and on manual dispatch. It selects the highest strictly numeric `3.x.y` version explicitly listed on the official release page; beta/RC/prerelease names are rejected. Every run rebuilds both platforms with fresh `alpine:3.24` pulls, disabled build cache, and `apk upgrade --no-cache` in both stages, even when BIRD has not changed. It never changes users' running containers. Alpine release-line changes require a reviewed repository change.
+Images are rebuilt daily with updated Alpine 3.24 packages, even when BIRD has not changed. New stable BIRD 3 releases are detected automatically; prereleases, beta and RC versions are excluded. Updating a registry tag does not update running containers: pull the image and recreate the container to apply an update.
 
-Manual dispatch accepts an optional stable `version`. An older explicitly selected version does not update `3` or `latest`. An older patch also does not update its minor-series alias when a newer stable patch is listed upstream. Scheduled GitHub Actions may be disabled after prolonged repository inactivity; check the Actions tab and failure notifications. Dependabot tracks workflow actions and Docker base references.
+## Security and verification
 
-### First publication
+Official CZ.NIC source tags are verified using the pinned BIRD OpenPGP release key before building. Both architectures must pass native runtime tests and Trivy scanning before publication. HIGH/CRITICAL vulnerabilities with available fixes block publication; failed builds leave the existing `latest` unchanged.
 
-GHCR creates new packages as private by default. After the first staging upload, an organization package administrator must open the package settings and change visibility to **Public**. The release job deliberately fails its anonymous-download gate until this is done; it does not silently publish release aliases for an inaccessible image. Re-run the failed publish job after setting visibility. Subsequent releases reuse the same public package.
-
-## Source authentication and supply chain
-
-1. Discover stable versions on `https://bird.nic.cz/get-bird/` over verified HTTPS; restrict redirects to explicit CZ.NIC hosts.
-2. Fetch the exact release tag from `https://gitlab.nic.cz/labs/bird.git`, with Git HTTP redirects disabled. If this transport remains unavailable after bounded retries (including HTTP 403), use the upstream-owned `https://github.com/CZ-NIC/bird.git` repository as a second official transport.
-3. Verify its OpenPGP signature against the committed key in `keys/bird-release.asc`. The pinned primary fingerprint is **6EFA4F8288F022C523505F30BA756F665CB418E2**, published on the [official BIRD contact page](https://bird.nic.cz/contact/). Verify that the signed `VERSION` file matches the release.
-4. Archive that signed commit, record commit, signer and SHA-256 in `source.json`, and independently verify the archive digest inside each Docker build.
-
-Transient HTTPS/Git transport failures, including HTTP 403, are retried a limited number of times against the two explicit official endpoints; the selected origin is recorded in `source.json`. Signature and checksum failures have no fallback.
-
-These are official Git sources, archived locally after signature verification, rather than the unsigned website release tarball. Autoconf generates the build system inside the build stage. Both official transports must pass the same pinned-key tag signature and signed-version checks. A signature failure does not trigger a mirror retry. An unsigned release, unexpected signer, expired/revoked key, invalid signature or checksum mismatch blocks the build. Key rotation requires maintainer review against upstream's published fingerprint; there is no insecure fallback or automatic trust of new keys.
-
-Each native build exports an OCI archive with BuildKit **SBOM and maximum provenance**. It is loaded for functional tests and scanned by **Trivy**. Any **HIGH/CRITICAL vulnerability with an available fix** blocks publication; failures to download the vulnerability database or run the scanner also fail the job. Unfixed CVEs and lower severities do not block this policy, and a successful scan is not a guarantee of absence of vulnerabilities. Trivy does not replace upstream security review and may not identify every issue in custom-built binaries.
-
-Only after **both** architectures pass does the publish job copy those same OCI archives, preserving digests and attestations, to GHCR. It assembles and validates the index, downloads both platforms without credentials, and then promotes the existing index to version aliases. No build occurs during promotion. Build/test/scan failure leaves the previously published `latest` untouched. Registry tag updates are separate operations and cannot be a transaction across all aliases; transient promotion failures may require a rerun. BuildKit provenance describes the build; this project does not currently provide an independent Cosign signature.
-
-Functional jobs use Bash with `errexit` and `pipefail`, and require an explicit final PASS marker; log capture cannot mask a failed test. Functional checks cover version output, missing/invalid configuration rejection, parsing all required protocol definitions, real daemon startup, active IPv4/IPv6 static routes, a Unix control socket, `birdc show status`, `show protocols`, `show route`, `configure check`, and graceful SIGTERM shutdown. Network-facing protocol definitions are disabled in the fixture: these checks prove availability and basic operation, not interoperability or live adjacency formation for every routing protocol.
-
-Actions artifacts include runtime logs, Trivy JSON, verified sources, source metadata, and tested OCI archives. Release logs and summaries contain the published index digest. After a successful release the workflow attempts to remove the known-invalid bootstrap revision `3.4.0-r3.1` and its architecture staging tags; package-administration permission failures appear as cleanup warnings. Do not deploy that revision from an old local cache. SBOM/provenance are registry attestations (additional `unknown/unknown` index entries are expected). These can be inspected with `docker buildx imagetools inspect` and tools supporting OCI attestations.
-
-### Alpine build compatibility
-
-Optional link-time optimization (LTO) is disabled with upstream's `--disable-lto` configure option. The BIRD 3.4.0 route exporter uses extended structures; in the Alpine/GCC LTO build, Fortify's source-size check traps while announcing even a basic static route. The non-LTO build passes the same native IPv4/IPv6 regression checks on both platforms. Optimization remains enabled, Fortify remains enabled and is asserted during the build, and no BIRD source patches or security-check bypasses are applied. This is a build compatibility choice, not a reduction of supported protocols.
-
-### Local development
-
-Requires Python 3, Git, GnuPG, Docker with Buildx, and network access to upstream services:
+Images include SPDX SBOMs and build provenance. Inspect the multi-platform manifest with:
 
 ```sh
-python3 scripts/test-release.py
-python3 scripts/check-release.py
-VERSION=$(python3 -c 'import json; print(json.load(open("source.json"))["version"])')
-SHA256=$(python3 -c 'import json; print(json.load(open("source.json"))["sha256"])')
-docker build --pull --no-cache --build-arg BIRD_VERSION="$VERSION" --build-arg BIRD_SHA256="$SHA256" -t bird3-local .
-bash scripts/test-image.sh bird3-local linux/amd64 "$VERSION"
+docker buildx imagetools inspect ghcr.io/tensilq-app/bird3:3
 ```
 
-Use `linux/arm64` on ARM64 hosts. Cross-platform local builds require emulation or a remote builder; release checks always run natively. Package repositories change over time, so dependency-refresh builds are not byte-for-byte reproducible. The signed source commit and archive checksum remain recorded for auditing.
+Additional `unknown/unknown` entries contain attestations, not runnable images. No separate Cosign signature is provided. A successful scan does not guarantee the absence of vulnerabilities.
+
+Runtime checks cover configuration parsing, daemon startup, the Unix socket, `birdc`, IPv4/IPv6 static routes and graceful shutdown. Live protocol adjacencies are not tested. Alpine package updates mean rebuilds are not byte-for-byte reproducible.
+
+Build and release procedures are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licensing and corresponding source
 
